@@ -1,0 +1,10 @@
+{
+  "name": "biliparser",
+  "version": "1.0.0",
+  "description": "Bilibili 视频解析工具",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  }
+}
