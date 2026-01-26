@@ -6,6 +6,12 @@
 
 支持解析 BV 号、b23.tv 短链及完整 URL，返回高清直链并可直接播放。
 
+## demo
+
+![https://bili.1s.fan](https://bili.1s.fan)
+
+~~悠着点，别给我免费额度搞完了~~
+
 ## 运行
 
 ```bash
