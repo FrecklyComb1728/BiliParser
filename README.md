@@ -8,7 +8,7 @@
 
 ## demo
 
-![https://bili.1s.fan](https://bili.1s.fan)
+[https://bili.1s.fan](https://bili.1s.fan)
 
 ~~悠着点，别给我免费额度搞完了~~
 
