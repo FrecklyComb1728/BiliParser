@@ -23,6 +23,9 @@ npm start
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/FrecklyComb1728/BiliParser)
 
 ~~不是不适配EO Pages，EO太他妈傻逼了，我没招了~~
+
+如果是vercel记得去设置函数区域为HongKong
+https://vercel.com/[You-Username]/bili-parser/settings/functions#function-region
 ## 使用
 
 打开浏览器访问：
