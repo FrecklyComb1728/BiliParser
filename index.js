@@ -131,7 +131,7 @@ async function resolveBili(bvid, qn, host) {
     return { title, pic: pic.replace(/^http:/, 'https:'), bvid, cid, rawUrl, playableUrl };
 }
 
-const server = http.createServer((req, res) => {
+function handleRequest(req, res) {
     const requestId = crypto.randomBytes(8).toString('hex');
     const startTime = process.hrtime.bigint();
     const remoteAddress = req.socket?.remoteAddress;
@@ -258,9 +258,16 @@ const server = http.createServer((req, res) => {
     };
 
     handler();
-});
+}
 
-const PORT = 3000;
-server.listen(PORT, () => {
-    console.log(`Bilibili Resolver 本地版运行中：http://localhost:${PORT}`);
-});
+const server = http.createServer(handleRequest);
+
+if (require.main === module) {
+    const PORT = process.env.PORT || 4836;
+    server.listen(PORT, () => {
+        console.log(`BiliParser 运行中，监听端口：${PORT}`);
+        console.log(`====================================`);
+    });
+}
+
+module.exports = handleRequest;
