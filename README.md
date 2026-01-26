@@ -24,7 +24,7 @@ npm start
 
 ~~不是不适配EO Pages，EO太他妈傻逼了，我没招了~~
 
-如果是vercel记得去设置函数区域为HongKong
+如果是vercel记得去设置函数区域为HongKong ~~(不设置其实也可以)~~
 https://vercel.com/[You-Username]/bili-parser/settings/functions#function-region
 ## 使用
 
