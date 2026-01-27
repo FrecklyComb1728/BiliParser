@@ -180,7 +180,48 @@ function handleRequest(req, res) {
         try {
             https.get(target, { headers: { 'Referer': REFERER, 'User-Agent': UA } }, (upstream) => {
                 setResponseTime();
-                res.writeHead(upstream.statusCode, upstream.headers);
+                const headers = { ...upstream.headers };
+                delete headers['content-disposition'];
+                res.writeHead(upstream.statusCode, headers);
+                upstream.pipe(res);
+            }).on('error', () => {
+                if (!res.headersSent) {
+                    res.statusCode = 502;
+                    setResponseTime();
+                    res.end('Proxy error');
+                }
+                log('error', 'proxy error', { requestId, target });
+            });
+        } catch {
+            res.statusCode = 400;
+            setResponseTime();
+            res.end('Invalid URL');
+        }
+        return;
+    }
+
+    if (urlPath === '/download') {
+        const target = params.get('url');
+        if (!target) {
+            res.statusCode = 400;
+            setResponseTime();
+            res.end('Missing url');
+            return;
+        }
+        try {
+            let fileName = 'video.mp4';
+            try {
+                const targetUrl = new URL(target);
+                const pathname = targetUrl.pathname || '';
+                const lastSegment = pathname.split('/').filter(Boolean).pop();
+                if (lastSegment) {
+                    fileName = lastSegment;
+                }
+            } catch {}
+            https.get(target, { headers: { 'Referer': REFERER, 'User-Agent': UA } }, (upstream) => {
+                setResponseTime();
+                const headers = { ...upstream.headers, 'Content-Disposition': `attachment; filename="${fileName}"` };
+                res.writeHead(upstream.statusCode, headers);
                 upstream.pipe(res);
             }).on('error', () => {
                 if (!res.headersSent) {
@@ -213,8 +254,132 @@ function handleRequest(req, res) {
         return;
     }
 
+    // Static assets handler
+    if (urlPath.startsWith('/assets/')) {
+        const filePath = path.join(__dirname, 'public', urlPath);
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeTypes = {
+            '.css': 'text/css',
+            '.js': 'application/javascript',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.svg': 'image/svg+xml',
+            '.ico': 'image/x-icon'
+        };
+
+        const contentType = mimeTypes[ext] || 'application/octet-stream';
+
+        fs.readFile(filePath, (err, content) => {
+            if (err) {
+                if (err.code === 'ENOENT') {
+                    res.statusCode = 404;
+                    res.end('Not Found');
+                } else {
+                    res.statusCode = 500;
+                    res.end('Server Error');
+                }
+                setResponseTime();
+                return;
+            }
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+            setResponseTime();
+            res.end(content);
+        });
+        return;
+    }
+
     const handler = async () => {
         try {
+            if (urlPath === '/htmx/any') {
+                const text = params.get('text');
+                const qn = params.get('qn') || '80';
+                
+                try {
+                    if (!text) throw new Error('Missing text');
+                    const bvid = await extractBvid(text);
+                    const info = await resolveBili(bvid, qn, host);
+                    
+                    const downloadUrl = info.playableUrl.replace('/video?url=', '/download?url=');
+                    
+                    const html = `
+                        <div class="fade-in">
+                            <div class="card border-0 shadow-sm overflow-hidden rounded-4 bg-white">
+                                <div class="row g-0">
+                                    <div class="col-md-5 position-relative group bg-slate-100" style="min-height: 200px;">
+                                        <img src="${info.pic}" class="w-100 h-100 object-fit-cover transition-transform duration-500" style="object-position: center;" referrerpolicy="no-referrer">
+                                        <div class="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center bg-black bg-opacity-10 opacity-0 hover:opacity-100 transition-opacity">
+                                            <button onclick="downloadCover('${info.pic}')" class="btn btn-sm btn-light fw-bold shadow-sm d-flex align-items-center gap-1">
+                                                <i class="ri-download-line"></i> 下载封面
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-7">
+                                        <div class="card-body p-4 d-flex flex-column h-100 justify-content-between gap-3">
+                                            <div>
+                                                <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
+                                                    <h5 class="card-title fw-bold text-slate-800 mb-0 text-truncate-2">${info.title}</h5>
+                                                </div>
+                                                <div>
+                                                    <span class="badge bg-slate-100 text-slate-600 font-monospace cursor-pointer hover:bg-sky-50 hover:text-sky-600 transition-colors" 
+                                                          onclick="copyText('${info.bvid}', 'BV号已复制')" 
+                                                          title="点击复制">
+                                                        ${info.bvid}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="border-top border-slate-100 pt-3">
+                                                <div class="mb-3">
+                                                    <label class="form-label text-uppercase text-slate-400 fw-bold" style="font-size: 0.75rem; letter-spacing: 0.05em;">直链地址 (No Referer)</label>
+                                                    <div class="input-group">
+                                                        <input type="text" class="form-control bg-slate-50 border-slate-200 text-slate-600 font-monospace fs-7" value="${info.playableUrl}" readonly id="res-link">
+                                                        <button class="btn btn-white border border-slate-200 text-slate-500 hover:text-sky-600 hover:bg-slate-50" type="button" onclick="copy('res-link')">
+                                                            <i class="ri-file-copy-line"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div class="d-grid gap-2 d-sm-flex">
+                                                    <a href="${info.playableUrl}" target="_blank" class="btn btn-primary bg-sky-50 border-0 text-sky-600 fw-bold flex-fill d-flex align-items-center justify-content-center gap-2 py-2 hover:bg-sky-100">
+                                                        <i class="ri-play-circle-fill fs-5"></i>
+                                                        在新窗口播放
+                                                    </a>
+                                                    <a href="${downloadUrl}" target="_blank" class="btn btn-white border border-slate-200 text-slate-600 fw-bold flex-fill d-flex align-items-center justify-content-center gap-2 py-2 hover:bg-slate-50 hover:text-sky-600">
+                                                        <i class="ri-download-cloud-line fs-5"></i>
+                                                        下载视频
+                                                    </a>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+                    setResponseTime();
+                    res.end(html);
+                } catch (e) {
+                    const errorHtml = `
+                        <div class="alert alert-danger border-0 shadow-sm d-flex align-items-center gap-3 fade-in" role="alert">
+                            <i class="ri-error-warning-fill fs-4"></i>
+                            <div>
+                                <div class="fw-bold">解析失败</div>
+                                <div class="small">${e.message || '未知错误，请检查链接是否正确'}</div>
+                            </div>
+                        </div>
+                    `;
+                    res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+                    setResponseTime();
+                    res.end(errorHtml);
+                }
+                return;
+            }
+
             if (urlPath === '/api/any') {
                 const text = params.get('text');
                 const qn = params.get('qn') || '80';
@@ -228,6 +393,7 @@ function handleRequest(req, res) {
             } else {
                 const directMatch = urlPath.match(/^\/(BV[a-zA-Z0-9]{10})$/);
                 const jsonMatch = urlPath.match(/^\/json\/(BV[a-zA-Z0-9]{10})$/);
+                const fullUrlMatch = urlPath.match(/^\/(https?:\/\/.*)$/);
                 if (directMatch || jsonMatch) {
                     const bvid = directMatch ? directMatch[1] : jsonMatch[1];
                     const qn = params.get('qn') || '80';
@@ -240,6 +406,31 @@ function handleRequest(req, res) {
                         res.setHeader('Content-Type', 'application/json; charset=UTF-8');
                         setResponseTime();
                         res.end(JSON.stringify(info));
+                    }
+                } else if (fullUrlMatch) {
+                    const full = decodeURIComponent(fullUrlMatch[1]);
+                    const qn = params.get('qn') || '80';
+                    const bvid = await extractBvid(full);
+                    const info = await resolveBili(bvid, qn, host);
+                    try {
+                        https.get(info.rawUrl, { headers: { 'Referer': REFERER, 'User-Agent': UA } }, (upstream) => {
+                            setResponseTime();
+                            const headers = { ...upstream.headers };
+                            delete headers['content-disposition'];
+                            res.writeHead(upstream.statusCode, headers);
+                            upstream.pipe(res);
+                        }).on('error', () => {
+                            if (!res.headersSent) {
+                                res.statusCode = 502;
+                                setResponseTime();
+                                res.end('Proxy error');
+                            }
+                            log('error', 'proxy error', { requestId, target: info.rawUrl });
+                        });
+                    } catch {
+                        res.statusCode = 400;
+                        setResponseTime();
+                        res.end('Invalid URL');
                     }
                 } else {
                     throw new Error('Not Found');

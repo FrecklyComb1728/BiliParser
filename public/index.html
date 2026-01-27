@@ -1,289 +1,122 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MIFENG | BiliParser - Bilibili 视频解析，支持1080P高清视频，支持解析 BV 号、b23.tv 短链及完整 URL。获取高清直链，无视防盗链限制</title>
+    <title>BiliParser - Bilibili 视频解析</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdn.jsdmirror.com/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.cn/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
-    
     <script>
         tailwind.config = {
             theme: {
                 extend: {
-                    fontFamily: {
-                        sans: ['"Inter"', '"Noto Sans SC"', 'sans-serif'],
-                    },
                     colors: {
-                        brand: {
+                        sky: {
                             50: '#f0f9ff',
                             100: '#e0f2fe',
-                            200: '#bae6fd',
-                            300: '#7dd3fc',
-                            400: '#38bdf8',
                             500: '#0ea5e9',
                             600: '#0284c7',
-                            700: '#0369a1',
-                            900: '#0c4a6e',
                         }
-                    },
-                    boxShadow: {
-                        'soft': '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
-                        'glow': '0 0 15px rgba(14, 165, 233, 0.3)',
                     }
                 }
             }
         }
     </script>
-    <style>
-        body {
-            background-color: #f8fafc;
-            background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
-            background-size: 24px 24px;
-        }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        .input-transition { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-        .spinner {
-            width: 24px;
-            height: 24px;
-            border: 3px solid rgba(14, 165, 233, 0.1);
-            border-radius: 50%;
-            border-top-color: #0ea5e9;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
+    <script src="https://cdn.jsdmirror.com/npm/htmx.org@1.9.10"></script>
+    <link href="https://cdn.jsdmirror.com/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.cn/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/css/style.css">
 </head>
-<body class="text-slate-600 antialiased min-h-screen flex flex-col">
-    <nav class="w-full bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40">
-        <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-            <div class="flex items-center gap-2">
-                <div class="w-8 h-8 bg-brand-500 rounded-lg flex items-center justify-center text-white">
-                    <i class="ri-bilibili-fill text-xl"></i>
+<body class="bg-sky-50 text-slate-600">
+    <nav class="navbar navbar-expand-lg bg-white/80 backdrop-blur-md border-b border-sky-100 sticky-top">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center gap-2 fw-bold text-slate-800" href="#">
+                <div class="bg-sky-500 rounded p-1 d-flex align-items-center justify-content-center text-white" style="width: 32px; height: 32px;">
+                    <i class="ri-bilibili-fill"></i>
                 </div>
-                <span class="font-bold text-slate-800 text-lg tracking-tight">BiliParser</span>
+                <span>BiliParser</span>
+            </a>
+            <div class="ms-auto">
+                <a href="https://github.com/FrecklyComb1728/BiliParser" target="_blank" class="text-slate-500 hover:text-sky-500 transition-colors">
+                    <i class="ri-github-fill fs-4"></i>
+                </a>
             </div>
         </div>
     </nav>
-    <div id="toast-container" class="fixed top-20 right-4 sm:right-8 z-50 flex flex-col gap-3 pointer-events-none"></div>
-    <main class="flex-1 w-full max-w-3xl mx-auto px-4 py-12 sm:py-20 flex flex-col gap-8">
-        <div class="text-center space-y-3">
-            <h1 class="text-4xl sm:text-5xl font-extrabold text-slate-900 tracking-tight">
-                视频解析，<span class="text-brand-500">从未如此简单</span>
-            </h1>
-            <p class="text-lg text-slate-500 max-w-xl mx-auto">
-                支持解析 BV 号、b23.tv 短链及完整 URL。获取高清直链，无视防盗链限制。
-            </p>
-        </div>
-        <div class="bg-white rounded-2xl shadow-soft border border-slate-100 p-2 sm:p-3 transition-shadow hover:shadow-lg duration-300">
-            <div class="flex flex-col sm:flex-row gap-2">
-                <div class="relative flex-1 group">
-                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                        <i class="ri-link-m text-slate-400 group-focus-within:text-brand-500 transition-colors"></i>
-                    </div>
-                    <input type="text" id="input" 
-                        placeholder="在此粘贴视频链接或 BV 号..." 
-                        class="w-full h-12 pl-11 pr-10 bg-slate-50 border border-transparent rounded-xl text-slate-800 placeholder-slate-400 outline-none focus:bg-white focus:border-brand-500 focus:ring-4 focus:ring-brand-500/10 input-transition font-medium"
-                        onkeypress="if(event.key === 'Enter') doParse()">
-                    <button onclick="clearInput()" id="clearBtn" class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 hidden cursor-pointer">
-                        <i class="ri-close-circle-fill"></i>
-                    </button>
+    <div id="toast-container" class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1055; margin-top: 60px;"></div>
+    <main class="container py-5">
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <div class="text-center mb-5">
+                    <h1 class="display-5 fw-bold text-slate-900 mb-3">
+                        视频解析，<span class="text-sky-500">从未如此简单</span>
+                    </h1>
+                    <p class="lead text-slate-500">
+                        支持解析 BV 号、b23.tv 短链及完整 URL。获取高清直链，无视防盗链限制。
+                    </p>
                 </div>
-                <div class="relative sm:w-40 group">
-                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <i class="ri-hd-line text-slate-400 group-focus-within:text-brand-500 transition-colors"></i>
-                    </div>
-                    <select id="qn" class="w-full h-12 pl-9 pr-8 bg-slate-50 border border-transparent rounded-xl text-slate-700 outline-none focus:bg-white focus:border-brand-500 focus:ring-4 focus:ring-brand-500/10 input-transition appearance-none cursor-pointer font-medium">
-                        <option value="80">1080P 高清</option>
-                        <option value="64">720P 高清</option>
-                        <option value="32">480P 清晰</option>
-                        <option value="16">360P 流畅</option>
-                    </select>
-                    <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                        <i class="ri-arrow-down-s-line text-slate-400"></i>
-                    </div>
-                </div>
-                <button onclick="doParse()" id="parseBtn" class="h-12 px-8 bg-brand-500 hover:bg-brand-600 text-white font-semibold rounded-xl transition-all shadow-md shadow-brand-500/20 active:scale-[0.98] flex items-center justify-center gap-2 whitespace-nowrap">
-                    <span>开始解析</span>
-                    <i class="ri-arrow-right-line"></i>
-                </button>
-            </div>
-        </div>
-        <div id="result" class="hidden flex flex-col gap-6 animate-slide-up">
-            <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div class="flex flex-col sm:flex-row">
-                    <div class="sm:w-64 aspect-video relative group overflow-hidden bg-slate-100">
-                        <img id="resPic" referrerpolicy="no-referrer" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105">
-                        <div class="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                            <button onclick="downloadCover()" class="bg-white/90 text-slate-800 px-4 py-2 rounded-lg text-xs font-bold shadow-lg transform translate-y-2 group-hover:translate-y-0 transition-all">
-                                <i class="ri-download-line mr-1"></i> 下载封面
-                            </button>
-                        </div>
-                    </div>
-                    <div class="p-5 flex flex-col justify-between flex-1 gap-4">
-                        <div class="space-y-2">
-                            <div class="flex items-start justify-between gap-4">
-                                <h2 id="resTitle" class="text-lg font-bold text-slate-800 leading-snug line-clamp-2"></h2>
-                            </div>
-                            <div class="flex items-center gap-2">
-                                <span id="resBvid" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 font-mono cursor-pointer hover:bg-brand-50 hover:text-brand-600 transition-colors" onclick="copyText(this.innerText, 'BV号已复制')" title="点击复制">
-                                    BV...
-                                </span>
-                            </div>
-                        </div>
-                        <div class="space-y-3 pt-2 border-t border-slate-100">
-                            <div class="space-y-1">
-                                <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">直链地址 (No Referer)</label>
-                                <div class="flex gap-2">
-                                    <input id="link" readonly class="flex-1 bg-slate-50 text-slate-600 text-xs rounded-lg px-3 py-2 border border-slate-200 outline-none focus:border-brand-500 font-mono">
-                                    <button onclick="copy('link')" class="px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 hover:text-brand-600 transition-colors">
-                                        <i class="ri-file-copy-line"></i>
+                <div class="card border-0 shadow-soft rounded-4 mb-4 bg-white">
+                    <div class="card-body p-2 p-sm-3">
+                        <form hx-get="/htmx/any" 
+                              hx-target="#result-container" 
+                              hx-indicator="#loader"
+                              hx-swap="innerHTML"
+                              onsubmit="if(!document.getElementById('input').value) { showToast('请输入链接', 'danger'); return false; }">
+                            
+                            <div class="d-flex flex-column flex-sm-row gap-2">
+                                <div class="position-relative flex-grow-1">
+                                    <div class="position-absolute top-50 start-0 translate-middle-y ps-3 text-slate-400">
+                                        <i class="ri-link-m"></i>
+                                    </div>
+                                    <input type="text" name="text" id="input" 
+                                           class="form-control form-control-lg border-0 bg-sky-50 ps-5 rounded-3 fs-6" 
+                                           placeholder="在此粘贴视频链接或 BV 号..."
+                                           autocomplete="off">
+                                    <button type="button" id="clearBtn" class="btn position-absolute top-50 end-0 translate-middle-y text-slate-400 border-0 d-none me-1">
+                                        <i class="ri-close-circle-fill"></i>
                                     </button>
                                 </div>
+
+                                <div class="position-relative" style="min-width: 140px;">
+                                    <div class="position-absolute top-50 start-0 translate-middle-y ps-3 text-slate-400" style="z-index: 5;">
+                                        <i class="ri-hd-line"></i>
+                                    </div>
+                                    <select name="qn" class="form-select form-select-lg border-0 bg-sky-50 ps-5 rounded-3 fs-6 h-100 cursor-pointer">
+                                        <option value="80">1080P 高清</option>
+                                        <option value="64">720P 高清</option>
+                                        <option value="32">480P 清晰</option>
+                                        <option value="16">360P 流畅</option>
+                                    </select>
+                                </div>
+
+                                <button type="submit" class="btn btn-primary bg-sky-500 border-0 btn-lg rounded-3 px-4 fw-semibold d-flex align-items-center justify-content-center gap-2 text-white shadow-sm hover:bg-sky-600">
+                                    <span>解析</span>
+                                    <i class="ri-arrow-right-line"></i>
+                                </button>
                             </div>
-                            <a id="play" target="_blank" class="flex items-center justify-center gap-2 w-full py-2.5 bg-brand-50 hover:bg-brand-100 text-brand-600 font-bold rounded-lg transition-colors">
-                                <i class="ri-play-circle-fill text-xl"></i>
-                                <span>在新窗口播放</span>
-                            </a>
-                        </div>
+                        </form>
                     </div>
                 </div>
+                <div id="loader" class="htmx-indicator flex-column align-items-center justify-content-center py-5">
+                    <div class="spinner-border text-sky-500" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-3 text-slate-400 small fw-medium">正在解析视频信息...</p>
+                </div>
+                <div id="result-container"></div>
+                
             </div>
         </div>
-        <div id="loader" class="hidden py-12 flex flex-col items-center justify-center space-y-4 text-center">
-            <div class="spinner"></div>
-            <p class="text-slate-400 text-sm font-medium animate-pulse">正在解析视频信息...</p>
-        </div>
     </main>
-    <footer class="py-6 text-center text-slate-400 text-sm">
-        <p>&copy; 2026 <a href="https://imbee.top" target="_blank">MIFENG</a> <span class="mx-2 text-slate-300">|</span> <a href="https://github.com/FrecklyComb1728/BiliParser" target="_blank" class="hover:text-brand-500 transition-colors">GitHub</a> <i class="ri-heart-3-fill text-red-400 align-middle"></i></p>
+    <footer class="text-center py-4 text-slate-400 small">
+        <p class="mb-0">
+            &copy; 2026 <a href="https://imbee.top" target="_blank" class="text-decoration-none text-slate-500 hover:text-sky-500">MIFENG</a> 
+            <span class="mx-2">|</span> 
+            <a href="https://github.com/FrecklyComb1728/BiliParser" target="_blank" class="text-decoration-none text-slate-500 hover:text-sky-500">GitHub</a>
+            <i class="ri-heart-3-fill text-danger align-middle ms-1"></i>
+        </p>
     </footer>
-    <script>
-        const inputEl = document.getElementById('input');
-        const clearBtn = document.getElementById('clearBtn');
-        
-        inputEl.addEventListener('input', (e) => {
-            clearBtn.classList.toggle('hidden', !e.target.value);
-        });
-
-        function clearInput() {
-            inputEl.value = '';
-            inputEl.focus();
-            clearBtn.classList.add('hidden');
-            document.getElementById('result').classList.add('hidden');
-        }
-        function showToast(message, type = 'info') {
-            const container = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            
-            const styles = {
-                success: 'bg-white border-green-200 text-green-700 shadow-lg shadow-green-500/5',
-                error: 'bg-white border-red-200 text-red-700 shadow-lg shadow-red-500/5',
-                info: 'bg-white border-slate-200 text-slate-700 shadow-lg shadow-slate-500/5'
-            };
-            
-            const icons = {
-                success: 'ri-checkbox-circle-fill text-green-500',
-                error: 'ri-error-warning-fill text-red-500',
-                info: 'ri-information-fill text-brand-500'
-            };
-
-            toast.className = `pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl border transform transition-all duration-300 translate-x-full opacity-0 ${styles[type] || styles.info}`;
-            toast.innerHTML = `
-                <i class="${icons[type] || icons.info} text-lg"></i>
-                <span class="text-sm font-medium">${message}</span>
-            `;
-
-            container.appendChild(toast);
-            requestAnimationFrame(() => toast.classList.remove('translate-x-full', 'opacity-0'));
-
-            setTimeout(() => {
-                toast.classList.add('translate-x-full', 'opacity-0');
-                setTimeout(() => toast.remove(), 300);
-            }, 3000);
-        }
-
-        function copy(id) {
-            const el = document.getElementById(id);
-            copyText(el.value, '链接已复制');
-            el.select();
-        }
-
-        async function copyText(text, successMsg) {
-            try {
-                await navigator.clipboard.writeText(text);
-                showToast(successMsg, 'success');
-            } catch (err) {
-                const textarea = document.createElement('textarea');
-                textarea.value = text;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-                showToast(successMsg, 'success');
-            }
-        }
-
-        function downloadCover() {
-            const src = document.getElementById('resPic').src;
-            if(src) {
-                const a = document.createElement('a');
-                a.href = src;
-                a.download = 'bili_cover.jpg';
-                a.target = '_blank';
-                a.click();
-            }
-        }
-
-        async function doParse() {
-            const inputVal = inputEl.value.trim();
-            const qn = document.getElementById('qn').value;
-            
-            if(!inputVal) {
-                showToast('请先输入视频链接', 'error');
-                inputEl.focus();
-                return;
-            }
-            
-            const loader = document.getElementById('loader');
-            const result = document.getElementById('result');
-            const btn = document.getElementById('parseBtn');
-            const originalBtnContent = btn.innerHTML;
-            
-            loader.classList.remove('hidden');
-            result.classList.add('hidden');
-            btn.disabled = true;
-            btn.innerHTML = '<div class="spinner border-white border-t-transparent w-5 h-5"></div>';
-
-            try {
-                const params = new URLSearchParams({ text: inputVal, qn: qn });
-                const res = await fetch(`/api/any?${params.toString()}`);
-                const data = await res.json();
-                
-                if(data.status === 'success') {
-                    document.getElementById('resPic').src = data.pic;
-                    document.getElementById('resTitle').innerText = data.title;
-                    document.getElementById('resBvid').innerText = data.bvid;
-                    document.getElementById('link').value = data.playableUrl;
-                    document.getElementById('play').href = data.playableUrl;
-                    
-                    result.classList.remove('hidden');
-                    showToast('解析成功', 'success');
-                } else { 
-                    showToast(data.message || '解析失败', 'error');
-                }
-            } catch(e) { 
-                showToast('网络请求错误', 'error');
-                console.error(e);
-            }
-            finally { 
-                loader.classList.add('hidden'); 
-                btn.disabled = false;
-                btn.innerHTML = originalBtnContent;
-            }
-        }
-    </script>
+    <script src="https://cdn.jsdmirror.com/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/assets/js/app.js"></script>
 </body>
 </html>
