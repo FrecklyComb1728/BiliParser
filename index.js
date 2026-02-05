@@ -4,9 +4,12 @@ const { URL } = require('url');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { pipeline } = require('stream/promises');
 
 const REFERER = 'https://www.bilibili.com/';
+const LIVE_REFERER = 'https://live.bilibili.com/';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const LOG_LEVELS = { fatal: 0, error: 1, warn: 2, info: 3, debug: 4, trace: 5 };
 const CURRENT_LOG_LEVEL = LOG_LEVELS[LOG_LEVEL] ?? LOG_LEVELS.info;
@@ -15,6 +18,14 @@ const log = (level, message, data = {}) => {
     if ((LOG_LEVELS[level] ?? LOG_LEVELS.info) > CURRENT_LOG_LEVEL) return;
     const payload = { time: new Date().toISOString(), level, message, ...data };
     process.stdout.write(`${JSON.stringify(payload)}\n`);
+};
+
+const RESULT_TEMPLATE_PATH = path.join(__dirname, 'public', 'index.html');
+let resultTemplateCache = null;
+
+const ERROR_MAP = {
+    '-400': '请求错误', '-403': '访问权限不足', '-404': '视频不存在',
+    '-10403': '仅限港澳台地区', '62002': '视频不可见', '62004': '审核中'
 };
 
 const mixinKeyEncTab = [
@@ -80,6 +91,112 @@ async function httpGetJson(urlStr, extraHeaders = {}) {
     });
 }
 
+async function getBuvid() {
+    try {
+        const json = await httpGetJson('https://api.bilibili.com/x/frontend/finger/spi');
+        return json.data?.b_3 || 'FE6D3664-927F-F75B-B7D4-733E5D4B263F69428infoc';
+    } catch {
+        return 'FE6D3664-927F-F75B-B7D4-733E5D4B263F69428infoc';
+    }
+}
+
+async function requestStream(urlStr, headers) {
+    const parsed = new URL(urlStr);
+    const client = parsed.protocol === 'http:' ? http : https;
+    return new Promise((resolve, reject) => {
+        const req = client.request({
+            method: 'GET',
+            hostname: parsed.hostname,
+            path: parsed.pathname + parsed.search,
+            headers
+        }, resolve);
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+async function readStreamText(stream) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        stream.on('data', chunk => body += chunk);
+        stream.on('end', () => resolve(body));
+        stream.on('error', reject);
+    });
+}
+
+function isAllowedHost(hostname) {
+    return hostname.includes('bilivideo') || hostname.includes('hdslb') || hostname.includes('akamaized');
+}
+
+function loadResultTemplate() {
+    if (resultTemplateCache !== null) return resultTemplateCache;
+    try {
+        const html = fs.readFileSync(RESULT_TEMPLATE_PATH, 'utf8');
+        const match = html.match(/<template id="result-template">([\s\S]*?)<\/template>/);
+        resultTemplateCache = match ? match[1].trim() : '';
+    } catch {
+        resultTemplateCache = '';
+    }
+    return resultTemplateCache;
+}
+
+function renderTemplate(template, data) {
+    return template.replace(/\{\{(\w+)\}\}/g, (_, key) => data[key] ?? '');
+}
+
+function sendHtml(res, setResponseTime, html) {
+    res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+    setResponseTime();
+    res.end(html);
+}
+
+function sendJson(res, setResponseTime, payload, extraHeaders = {}) {
+    res.setHeader('Content-Type', 'application/json; charset=UTF-8');
+    Object.entries(extraHeaders).forEach(([key, value]) => res.setHeader(key, value));
+    setResponseTime();
+    res.end(JSON.stringify(payload));
+}
+
+function parseRoomId(text) {
+    return text?.match(/(\d+)/)?.[1] || null;
+}
+
+function sendApiSuccess(res, setResponseTime, data, cors = false) {
+    sendJson(res, setResponseTime, { status: 'success', ...data }, cors ? { 'Access-Control-Allow-Origin': '*' } : {});
+}
+
+function sendApiError(res, setResponseTime, message, cors = false) {
+    sendJson(res, setResponseTime, { status: 'error', message }, cors ? { 'Access-Control-Allow-Origin': '*' } : {});
+}
+
+function buildErrorHtml(message) {
+    return `
+        <div class="alert alert-danger border-0 shadow-sm d-flex align-items-center gap-3 fade-in" role="alert">
+            <i class="ri-error-warning-fill fs-4"></i>
+            <div>
+                <div class="fw-bold">解析失败</div>
+                <div class="small">${message || '未知错误，请检查链接是否正确'}</div>
+            </div>
+        </div>
+    `;
+}
+
+function getQn(params) {
+    return params.get('qn') || '80';
+}
+
+function buildProxyHeaders(urlStr, reqHeaders) {
+    const isM3u8 = urlStr.includes('.m3u8');
+    const isLive = urlStr.includes('live-bvc') || isM3u8;
+    const headers = {
+        'Referer': isLive ? LIVE_REFERER : REFERER,
+        'User-Agent': isLive ? UA_MOBILE : UA,
+        'Origin': isLive ? 'https://live.bilibili.com' : 'https://www.bilibili.com'
+    };
+    if (reqHeaders.range) headers.Range = reqHeaders.range;
+    return { headers, isM3u8 };
+}
+
 async function signWbi(params) {
     const json = await httpGetJson('https://api.bilibili.com/x/web-interface/nav');
     const { img_url, sub_url } = json.data.wbi_img;
@@ -92,6 +209,24 @@ async function signWbi(params) {
     const query = sortedKeys.map(k => `${k}=${encodeURIComponent(currParams[k])}`).join('&');
     const w_rid = md5(query + mixin_key);
     return `${query}&w_rid=${w_rid}`;
+}
+
+async function getPlayUrlWithFallback(bvid, cid, targetQn) {
+    const qualities = [targetQn, 80, 64, 32].filter((v, i, a) => a.indexOf(v) === i && v <= targetQn);
+    let lastError = null;
+    for (const qn of qualities) {
+        try {
+            const signedQuery = await signWbi({ bvid, cid, qn, fnval: 1 });
+            const pData = await httpGetJson(`https://api.bilibili.com/x/player/wbi/playurl?${signedQuery}`, { 'Referer': REFERER });
+            if (pData.code === 0 && pData.data?.durl?.[0]) {
+                return { url: pData.data.durl[0].url, quality: pData.data.quality };
+            }
+            lastError = pData.message || ERROR_MAP[pData.code];
+        } catch (e) {
+            lastError = e.message;
+        }
+    }
+    throw new Error(lastError || '视频解析失败');
 }
 
 async function extractBvid(text) {
@@ -109,26 +244,171 @@ async function extractBvid(text) {
 
     // 支持完整 bilibili 链接
     match = text.match(/bilibili\.com\/video\/(BV[a-zA-Z0-9]{10})/i);
+    // 支持直播链接
+    const liveMatch = text.match(/live\.bilibili\.com\/(\d+)/i);
+    
     if (match) return match[1];
+    if (liveMatch) return `Live${liveMatch[1]}`;
 
     throw new Error('未能识别有效的 BV 号或链接');
 }
 
 async function resolveBili(bvid, qn, host) {
-    qn = qn || 80;
+    const qnValue = parseInt(qn, 10) || 80;
     const vData = await httpGetJson(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`);
-    if (vData.code !== 0) throw new Error(vData.message || '视频信息获取失败');
+    if (vData.code !== 0) throw new Error(ERROR_MAP[vData.code] || vData.message || '视频信息获取失败');
 
-    const { cid, title, pic } = vData.data;
-    const signedQuery = await signWbi({ bvid, cid, qn, fnval: 1 });
-    const pData = await httpGetJson(`https://api.bilibili.com/x/player/wbi/playurl?${signedQuery}`, { 'Referer': REFERER });
-    if (pData.code !== 0) throw new Error(pData.message || '视频地址解析失败');
+    const { cid, title, pic, owner } = vData.data;
+    const videoStream = await getPlayUrlWithFallback(bvid, cid, qnValue);
+    const playableUrl = `${host}/video?url=${encodeURIComponent(videoStream.url)}`;
+    const downloadUrl = `${host}/download?url=${encodeURIComponent(videoStream.url)}`;
+    return {
+        title,
+        pic: pic.replace(/^http:/, 'https:'),
+        bvid,
+        cid,
+        rawUrl: videoStream.url,
+        playableUrl,
+        downloadUrl,
+        quality: videoStream.quality,
+        author: owner?.name,
+        isLive: false
+    };
+}
 
-    const rawUrl = pData.data.durl?.[0]?.url;
-    if (!rawUrl) throw new Error('未找到可用视频流（可能为 DASH 分段）');
+async function resolveLive(roomId, host) {
+    const infoData = await httpGetJson(`https://api.live.bilibili.com/room/v1/Room/get_info?room_id=${roomId}`, { 'Referer': LIVE_REFERER });
+    if (infoData.code !== 0) throw new Error('直播间不存在');
 
-    const playableUrl = `${host}/video?url=${encodeURIComponent(rawUrl)}`;
-    return { title, pic: pic.replace(/^http:/, 'https:'), bvid, cid, rawUrl, playableUrl };
+    const { title, user_cover, keyframe, live_status, room_id: realRoomId, uid } = infoData.data;
+    if (live_status !== 1) throw new Error('主播未开播');
+
+    const buvid = await getBuvid();
+    const headers = {
+        'User-Agent': UA_MOBILE,
+        'Referer': `https://live.bilibili.com/${realRoomId}`,
+        'Origin': 'https://live.bilibili.com',
+        'Cookie': `buvid3=${buvid}`
+    };
+
+    const fetchStreamLegacy = async () => {
+        try {
+            const data = await httpGetJson(`https://api.live.bilibili.com/room/v1/Room/playUrl?cid=${realRoomId}&platform=h5&quality=3`, headers);
+            if (data.data?.durl?.[0]?.url) {
+                const url = data.data.durl[0].url;
+                const isCN = url.includes('cn-');
+                return { url, nodeType: isCN ? 'CN' : 'OV' };
+            }
+        } catch {}
+        return null;
+    };
+
+    const fetchStreamV2 = async () => {
+        try {
+            const data = await httpGetJson(`https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${realRoomId}&protocol=0,1&format=0,1,2&codec=0,1&platform=h5&qn=150`, headers);
+            const streams = data.data?.playurl_info?.playurl?.stream;
+            if (!streams) return null;
+            for (const s of streams) {
+                if (s.format?.[0]?.codec?.[0]) {
+                    const codecInfo = s.format[0].codec[0];
+                    const urlInfos = codecInfo.url_info;
+                    const cnNode = urlInfos.find(u => u.host.includes('cn-'));
+                    if (cnNode) {
+                        return { url: cnNode.host + codecInfo.base_url + cnNode.extra, nodeType: 'CN' };
+                    }
+                    return { url: urlInfos[0].host + codecInfo.base_url + urlInfos[0].extra, nodeType: 'OV' };
+                }
+            }
+        } catch {}
+        return null;
+    };
+
+    let result = await fetchStreamLegacy();
+    if (!result) result = await fetchStreamV2();
+    if (!result) throw new Error('获取直播流失败');
+
+    const isHls = result.url.includes('.m3u8');
+    const formatStr = `${isHls ? 'HLS' : 'FLV'} (${result.nodeType})`;
+    const playableUrl = `${host}/live?url=${encodeURIComponent(result.url)}`;
+
+    return {
+        title,
+        pic: user_cover || keyframe,
+        author: `UID:${uid}`,
+        playableUrl,
+        downloadUrl: result.url,
+        quality: 0,
+        isLive: true,
+        format: formatStr,
+        nodeType: result.nodeType
+    };
+}
+
+async function proxyToResponse({ req, res, requestId, setResponseTime, target, host, isDownload, downloadName, allowM3u8Rewrite }) {
+    if (!target) {
+        res.statusCode = 400;
+        setResponseTime();
+        res.end('Missing url');
+        return;
+    }
+
+    let targetUrl;
+    try {
+        targetUrl = new URL(target);
+    } catch {
+        res.statusCode = 400;
+        setResponseTime();
+        res.end('Invalid URL');
+        return;
+    }
+
+    if (!isAllowedHost(targetUrl.hostname)) {
+        res.statusCode = 403;
+        setResponseTime();
+        res.end('Forbidden');
+        return;
+    }
+
+    const { headers, isM3u8 } = buildProxyHeaders(target, req.headers);
+
+    try {
+        const upstream = await requestStream(target, headers);
+        if (allowM3u8Rewrite && isM3u8) {
+            let m3u8Content = await readStreamText(upstream);
+            const baseUrl = target.substring(0, target.lastIndexOf('/') + 1);
+            m3u8Content = m3u8Content.split('\n').map(line => {
+                const trimmed = line.trim();
+                if (trimmed && !trimmed.startsWith('#')) {
+                    const absoluteUrl = trimmed.startsWith('http') ? trimmed : baseUrl + trimmed;
+                    return `${host}/live?url=${encodeURIComponent(absoluteUrl)}`;
+                }
+                return line;
+            }).join('\n');
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            setResponseTime();
+            res.end(m3u8Content);
+            return;
+        }
+
+        const responseHeaders = { ...upstream.headers };
+        delete responseHeaders['content-disposition'];
+        if (downloadName && isDownload) {
+            responseHeaders['content-disposition'] = `attachment; filename="${encodeURIComponent(downloadName)}"`;
+        }
+        if (allowM3u8Rewrite) responseHeaders['access-control-allow-origin'] = '*';
+        setResponseTime();
+        res.writeHead(upstream.statusCode || 502, responseHeaders);
+        await pipeline(upstream, res);
+    } catch (e) {
+        if (!res.headersSent) {
+            res.statusCode = 502;
+            setResponseTime();
+            res.end('Proxy error');
+        }
+        log('error', 'proxy error', { requestId, target });
+    }
 }
 
 function handleRequest(req, res) {
@@ -171,45 +451,23 @@ function handleRequest(req, res) {
 
     if (urlPath === '/video') {
         const target = params.get('url');
-        if (!target) {
-            res.statusCode = 400;
-            setResponseTime();
-            res.end('Missing url');
-            return;
-        }
-        try {
-            https.get(target, { headers: { 'Referer': REFERER, 'User-Agent': UA } }, (upstream) => {
-                setResponseTime();
-                const headers = { ...upstream.headers };
-                delete headers['content-disposition'];
-                res.writeHead(upstream.statusCode, headers);
-                upstream.pipe(res);
-            }).on('error', () => {
-                if (!res.headersSent) {
-                    res.statusCode = 502;
-                    setResponseTime();
-                    res.end('Proxy error');
-                }
-                log('error', 'proxy error', { requestId, target });
-            });
-        } catch {
-            res.statusCode = 400;
-            setResponseTime();
-            res.end('Invalid URL');
-        }
+        proxyToResponse({
+            req,
+            res,
+            requestId,
+            setResponseTime,
+            target,
+            host,
+            isDownload: false,
+            allowM3u8Rewrite: false
+        });
         return;
     }
 
     if (urlPath === '/download') {
         const target = params.get('url');
-        if (!target) {
-            res.statusCode = 400;
-            setResponseTime();
-            res.end('Missing url');
-            return;
-        }
-        try {
-            let fileName = 'video.mp4';
+        let fileName = 'video.mp4';
+        if (target) {
             try {
                 const targetUrl = new URL(target);
                 const pathname = targetUrl.pathname || '';
@@ -218,29 +476,41 @@ function handleRequest(req, res) {
                     fileName = lastSegment;
                 }
             } catch {}
-            https.get(target, { headers: { 'Referer': REFERER, 'User-Agent': UA } }, (upstream) => {
-                setResponseTime();
-                const headers = { ...upstream.headers, 'Content-Disposition': `attachment; filename="${fileName}"` };
-                res.writeHead(upstream.statusCode, headers);
-                upstream.pipe(res);
-            }).on('error', () => {
-                if (!res.headersSent) {
-                    res.statusCode = 502;
-                    setResponseTime();
-                    res.end('Proxy error');
-                }
-                log('error', 'proxy error', { requestId, target });
-            });
-        } catch {
-            res.statusCode = 400;
-            setResponseTime();
-            res.end('Invalid URL');
         }
+        proxyToResponse({
+            req,
+            res,
+            requestId,
+            setResponseTime,
+            target,
+            host,
+            isDownload: true,
+            downloadName: fileName,
+            allowM3u8Rewrite: false
+        });
+        return;
+    }
+
+    if (urlPath === '/live') {
+        const target = params.get('url');
+        const name = params.get('name');
+        const isDownload = params.get('dl') === '1';
+        const downloadName = name ? `${name}.mp4` : undefined;
+        proxyToResponse({
+            req,
+            res,
+            requestId,
+            setResponseTime,
+            target,
+            host,
+            isDownload,
+            downloadName,
+            allowM3u8Rewrite: true
+        });
         return;
     }
 
     if (urlPath === '/' || urlPath === '') {
-        res.setHeader('Content-Type', 'text/html; charset=UTF-8');
         fs.readFile(path.join(__dirname, 'public', 'index.html'), (err, content) => {
             if (err) {
                 res.statusCode = 500;
@@ -248,13 +518,13 @@ function handleRequest(req, res) {
                 res.end('Server Error: public/index.html not found');
                 return;
             }
+            res.setHeader('Content-Type', 'text/html; charset=UTF-8');
             setResponseTime();
             res.end(content);
         });
         return;
     }
 
-    // Static assets handler
     if (urlPath.startsWith('/assets/')) {
         const filePath = path.join(__dirname, 'public', urlPath);
         const ext = path.extname(filePath).toLowerCase();
@@ -284,7 +554,7 @@ function handleRequest(req, res) {
                 return;
             }
             res.setHeader('Content-Type', contentType);
-            res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+            res.setHeader('Cache-Control', 'public, max-age=3600');
             setResponseTime();
             res.end(content);
         });
@@ -293,145 +563,109 @@ function handleRequest(req, res) {
 
     const handler = async () => {
         try {
+            const liveMatch = urlPath.match(/^\/live\/(\d+)$/);
+            if (liveMatch) {
+                try {
+                    const liveInfo = await resolveLive(liveMatch[1], host);
+                    res.statusCode = 302;
+                    res.setHeader('Location', liveInfo.downloadUrl);
+                    setResponseTime();
+                    res.end();
+                } catch (e) {
+                    res.statusCode = 500;
+                    setResponseTime();
+                    res.end(`Error: ${e.message}`);
+                }
+                return;
+            }
+
             if (urlPath === '/htmx/any') {
                 const text = params.get('text');
-                const qn = params.get('qn') || '80';
-                
+                const qn = getQn(params);
                 try {
                     if (!text) throw new Error('Missing text');
                     const bvid = await extractBvid(text);
+                    if (bvid.startsWith('Live')) {
+                        throw new Error('请使用直播入口');
+                    }
                     const info = await resolveBili(bvid, qn, host);
-                    
-                    const downloadUrl = info.playableUrl.replace('/video?url=', '/download?url=');
-                    
-                    const html = `
-                        <div class="fade-in">
-                            <div class="card border-0 shadow-sm overflow-hidden rounded-4 bg-white">
-                                <div class="row g-0">
-                                    <div class="col-md-5 position-relative group bg-slate-100" style="min-height: 200px;">
-                                        <img src="${info.pic}" class="w-100 h-100 object-fit-cover transition-transform duration-500" style="object-position: center;" referrerpolicy="no-referrer">
-                                        <div class="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center bg-black bg-opacity-10 opacity-0 hover:opacity-100 transition-opacity">
-                                            <button onclick="downloadCover('${info.pic}')" class="btn btn-sm btn-light fw-bold shadow-sm d-flex align-items-center gap-1">
-                                                <i class="ri-download-line"></i> 下载封面
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-7">
-                                        <div class="card-body p-4 d-flex flex-column h-100 justify-content-between gap-3">
-                                            <div>
-                                                <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
-                                                    <h5 class="card-title fw-bold text-slate-800 mb-0 text-truncate-2">${info.title}</h5>
-                                                </div>
-                                                <div>
-                                                    <span class="badge bg-slate-100 text-slate-600 font-monospace cursor-pointer hover:bg-sky-50 hover:text-sky-600 transition-colors" 
-                                                          onclick="copyText('${info.bvid}', 'BV号已复制')" 
-                                                          title="点击复制">
-                                                        ${info.bvid}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            
-                                            <div class="border-top border-slate-100 pt-3">
-                                                <div class="mb-3">
-                                                    <label class="form-label text-uppercase text-slate-400 fw-bold" style="font-size: 0.75rem; letter-spacing: 0.05em;">直链地址 (No Referer)</label>
-                                                    <div class="input-group">
-                                                        <input type="text" class="form-control bg-slate-50 border-slate-200 text-slate-600 font-monospace fs-7" value="${info.playableUrl}" readonly id="res-link">
-                                                        <button class="btn btn-white border border-slate-200 text-slate-500 hover:text-sky-600 hover:bg-slate-50" type="button" onclick="copy('res-link')">
-                                                            <i class="ri-file-copy-line"></i>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                
-                                                <div class="d-grid gap-2 d-sm-flex">
-                                                    <a href="${info.playableUrl}" target="_blank" class="btn btn-primary bg-sky-50 border-0 text-sky-600 fw-bold flex-fill d-flex align-items-center justify-content-center gap-2 py-2 hover:bg-sky-100">
-                                                        <i class="ri-play-circle-fill fs-5"></i>
-                                                        在新窗口播放
-                                                    </a>
-                                                    <a href="${downloadUrl}" target="_blank" class="btn btn-white border border-slate-200 text-slate-600 fw-bold flex-fill d-flex align-items-center justify-content-center gap-2 py-2 hover:bg-slate-50 hover:text-sky-600">
-                                                        <i class="ri-download-cloud-line fs-5"></i>
-                                                        下载视频
-                                                    </a>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                    
-                    res.setHeader('Content-Type', 'text/html; charset=UTF-8');
-                    setResponseTime();
-                    res.end(html);
+                    const downloadUrl = info.downloadUrl;
+                    const template = loadResultTemplate();
+                    if (!template) throw new Error('模板缺失');
+                    const html = renderTemplate(template, {
+                        pic: info.pic,
+                        title: info.title,
+                        bvid: info.bvid,
+                        playableUrl: info.playableUrl,
+                        downloadUrl
+                    });
+                    sendHtml(res, setResponseTime, html);
                 } catch (e) {
-                    const errorHtml = `
-                        <div class="alert alert-danger border-0 shadow-sm d-flex align-items-center gap-3 fade-in" role="alert">
-                            <i class="ri-error-warning-fill fs-4"></i>
-                            <div>
-                                <div class="fw-bold">解析失败</div>
-                                <div class="small">${e.message || '未知错误，请检查链接是否正确'}</div>
-                            </div>
-                        </div>
-                    `;
-                    res.setHeader('Content-Type', 'text/html; charset=UTF-8');
-                    setResponseTime();
-                    res.end(errorHtml);
+                    sendHtml(res, setResponseTime, buildErrorHtml(e.message));
+                }
+                return;
+            }
+
+            if (urlPath === '/api/live') {
+                const room = params.get('room');
+                if (!room) throw new Error('Missing room');
+                const roomId = parseRoomId(room);
+                if (!roomId) {
+                    sendApiError(res, setResponseTime, '无效的房间号', true);
+                    return;
+                }
+                try {
+                    const info = await resolveLive(roomId, host);
+                    sendApiSuccess(res, setResponseTime, info, true);
+                } catch (e) {
+                    sendApiError(res, setResponseTime, e.message, true);
                 }
                 return;
             }
 
             if (urlPath === '/api/any') {
                 const text = params.get('text');
-                const qn = params.get('qn') || '80';
+                const qn = getQn(params);
                 if (!text) throw new Error('Missing text');
                 const bvid = await extractBvid(text);
+                if (bvid.startsWith('Live')) {
+                    const roomId = bvid.replace('Live', '');
+                    const info = await resolveLive(roomId, host);
+                    sendApiSuccess(res, setResponseTime, info, true);
+                    return;
+                }
                 const info = await resolveBili(bvid, qn, host);
-                res.setHeader('Content-Type', 'application/json; charset=UTF-8');
-                res.setHeader('Access-Control-Allow-Origin', '*');
-                setResponseTime();
-                res.end(JSON.stringify({ status: 'success', ...info }));
+                sendApiSuccess(res, setResponseTime, info, true);
             } else {
                 const directMatch = urlPath.match(/^\/(BV[a-zA-Z0-9]{10})$/);
                 const jsonMatch = urlPath.match(/^\/json\/(BV[a-zA-Z0-9]{10})$/);
                 const fullUrlMatch = urlPath.match(/^\/(https?:\/\/.*)$/);
                 if (directMatch || jsonMatch) {
                     const bvid = directMatch ? directMatch[1] : jsonMatch[1];
-                    const qn = params.get('qn') || '80';
+                    const qn = getQn(params);
                     const info = await resolveBili(bvid, qn, host);
                     if (directMatch) {
                         setResponseTime();
                         res.writeHead(302, { Location: info.playableUrl });
                         res.end();
                     } else {
-                        res.setHeader('Content-Type', 'application/json; charset=UTF-8');
-                        setResponseTime();
-                        res.end(JSON.stringify(info));
+                        sendJson(res, setResponseTime, info);
                     }
                 } else if (fullUrlMatch) {
                     const full = decodeURIComponent(fullUrlMatch[1]);
-                    const qn = params.get('qn') || '80';
+                    const qn = getQn(params);
                     const bvid = await extractBvid(full);
                     const info = await resolveBili(bvid, qn, host);
-                    try {
-                        https.get(info.rawUrl, { headers: { 'Referer': REFERER, 'User-Agent': UA } }, (upstream) => {
-                            setResponseTime();
-                            const headers = { ...upstream.headers };
-                            delete headers['content-disposition'];
-                            res.writeHead(upstream.statusCode, headers);
-                            upstream.pipe(res);
-                        }).on('error', () => {
-                            if (!res.headersSent) {
-                                res.statusCode = 502;
-                                setResponseTime();
-                                res.end('Proxy error');
-                            }
-                            log('error', 'proxy error', { requestId, target: info.rawUrl });
-                        });
-                    } catch {
-                        res.statusCode = 400;
-                        setResponseTime();
-                        res.end('Invalid URL');
-                    }
+                    proxyToResponse({
+                        req,
+                        res,
+                        requestId,
+                        setResponseTime,
+                        target: info.rawUrl,
+                        host,
+                        isDownload: false,
+                        allowM3u8Rewrite: false
+                    });
                 } else {
                     throw new Error('Not Found');
                 }
@@ -440,9 +674,7 @@ function handleRequest(req, res) {
             const status = e.message === 'Not Found' ? 404 : 500;
             if (!res.headersSent) {
                 res.statusCode = status;
-                res.setHeader('Content-Type', 'application/json; charset=UTF-8');
-                setResponseTime();
-                res.end(JSON.stringify({ status: 'error', message: e.message || 'Unknown error' }));
+                sendJson(res, setResponseTime, { status: 'error', message: e.message || 'Unknown error' });
             }
             log('error', 'request failed', { requestId, message: e.message });
         }

@@ -22,8 +22,8 @@
             }
         }
     </script>
-    <script src="https://cdn.jsdmirror.com/npm/htmx.org@1.9.10"></script>
-    <link href="https://cdn.jsdmirror.com/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <script src="https://jsd.onmicrosoft.cn/npm/htmx.org@1.9.10"></script>
+    <link href="https://jsd.onmicrosoft.cn/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <link href="https://fonts.googleapis.cn/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/assets/css/style.css">
 </head>
@@ -52,7 +52,7 @@
                         视频解析，<span class="text-sky-500">从未如此简单</span>
                     </h1>
                     <p class="lead text-slate-500">
-                        支持解析 BV 号、b23.tv 短链及完整 URL。获取高清直链，无视防盗链限制。
+                        支持解析 BV 号、b23.tv 短链及完整 URL。支持解析直播链接。获取高清直链，无视防盗链限制。
                     </p>
                 </div>
                 <div class="card border-0 shadow-soft rounded-4 mb-4 bg-white">
@@ -70,7 +70,7 @@
                                     </div>
                                     <input type="text" name="text" id="input" 
                                            class="form-control form-control-lg border-0 bg-sky-50 ps-5 rounded-3 fs-6" 
-                                           placeholder="在此粘贴视频链接或 BV 号..."
+                                           placeholder="在此粘贴视频链接或 BV、Live 号..."
                                            autocomplete="off">
                                     <button type="button" id="clearBtn" class="btn position-absolute top-50 end-0 translate-middle-y text-slate-400 border-0 d-none me-1">
                                         <i class="ri-close-circle-fill"></i>
@@ -104,6 +104,61 @@
                     <p class="mt-3 text-slate-400 small fw-medium">正在解析视频信息...</p>
                 </div>
                 <div id="result-container"></div>
+                <template id="result-template">
+                    <div class="fade-in">
+                        <div class="card border-0 shadow-sm overflow-hidden rounded-4 bg-white">
+                            <div class="row g-0">
+                                <div class="col-md-5 position-relative group bg-slate-100" style="min-height: 200px;">
+                                    <img src="{{pic}}" class="w-100 h-100 object-fit-cover transition-transform duration-500" style="object-position: center;" referrerpolicy="no-referrer">
+                                    <div class="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center bg-black bg-opacity-10 opacity-0 hover:opacity-100 transition-opacity">
+                                        <button onclick="downloadCover('{{pic}}')" class="btn btn-sm btn-light fw-bold shadow-sm d-flex align-items-center gap-1">
+                                            <i class="ri-download-line"></i> 下载封面
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="col-md-7">
+                                    <div class="card-body p-4 d-flex flex-column h-100 justify-content-between gap-3">
+                                        <div>
+                                            <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
+                                                <h5 class="card-title fw-bold text-slate-800 mb-0 text-truncate-2">{{title}}</h5>
+                                            </div>
+                                            <div>
+                                                <span class="badge bg-slate-100 text-slate-600 font-monospace cursor-pointer hover:bg-sky-50 hover:text-sky-600 transition-colors" 
+                                                      onclick="copyText('{{bvid}}', 'BV号已复制')" 
+                                                      title="点击复制">
+                                                    {{bvid}}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="border-top border-slate-100 pt-3">
+                                            <div class="mb-3">
+                                                <label class="form-label text-uppercase text-slate-400 fw-bold" style="font-size: 0.75rem; letter-spacing: 0.05em;">直链地址 (No Referer)</label>
+                                                <div class="input-group">
+                                                    <input type="text" class="form-control bg-slate-50 border-slate-200 text-slate-600 font-monospace fs-7" value="{{playableUrl}}" readonly id="res-link">
+                                                    <button class="btn btn-white border border-slate-200 text-slate-500 hover:text-sky-600 hover:bg-slate-50" type="button" onclick="copy('res-link')">
+                                                        <i class="ri-file-copy-line"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="d-grid gap-2 d-sm-flex">
+                                                <a href="{{playableUrl}}" target="_blank" class="btn btn-primary bg-sky-50 border-0 text-sky-600 fw-bold flex-fill d-flex align-items-center justify-content-center gap-2 py-2 hover:bg-sky-100">
+                                                    <i class="ri-play-circle-fill fs-5"></i>
+                                                    在新窗口播放
+                                                </a>
+                                                <a href="{{downloadUrl}}" target="_blank" class="btn btn-white border border-slate-200 text-slate-600 fw-bold flex-fill d-flex align-items-center justify-content-center gap-2 py-2 hover:bg-slate-50 hover:text-sky-600">
+                                                    <i class="ri-download-cloud-line fs-5"></i>
+                                                    下载视频
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
                 
             </div>
         </div>
@@ -116,7 +171,7 @@
             <i class="ri-heart-3-fill text-danger align-middle ms-1"></i>
         </p>
     </footer>
-    <script src="https://cdn.jsdmirror.com/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://jsd.onmicrosoft.cn/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/assets/js/app.js"></script>
 </body>
 </html>
